@@ -35,6 +35,7 @@
 #include <ns3/constant-position-mobility-model.h>
 #include <ns3/packet.h>
 #include <ns3/buildings-module.h>
+// #include "ns3/error-model.h"
 
 #include <iostream>
 #include <sstream>
@@ -51,18 +52,19 @@ using namespace ns3;
 class PacketStructure {
 public:
   uint32_t SRN;       // 4 bytes: set of path field
-  uint8_t direction;  // 1 byte : direction
+  uint8_t dest_idx;   // 1 byte : destination index (before: direction)
   uint8_t seq;        // 1 byte : sequence
   double payload;     // 8 bytes: payload
 
   uint16_t GetDsn () {
-    return (static_cast<uint16_t>(direction) *1000) + static_cast<uint16_t>(seq);
+    return (static_cast<uint16_t>(dest_idx) *1000) + static_cast<uint16_t>(seq);
   }
 };
 
 class DeviceStructure {
 public:
   int node_role = 0;    // Default : RELAY_NODE_ROLE
+  int destination = -1;
 
   double reference = 0;
 
@@ -85,13 +87,13 @@ public:
 // END CLASS SPACE =============================================================
 
 // CONTSTANT ===================================================================
-const int PLANT_SIZE             = 1;
-const int NODE_SIZE              = 23;
-const int CONTROLLER_ROLE        = 2;
-const int PLANT_ROLE             = 1;
-const int RELAY_NODE_ROLE        = 0;
-const int CONTROLLER_DIRECTION   = 0;
-const int PLANT_DIRECTION        = 1;
+const int PLANT_SIZE                 = 1;
+const int NODE_SIZE                  = 23;
+const int CONTROLLER_ROLE            = 2;
+const int PLANT_ROLE                 = 1;
+const int RELAY_NODE_ROLE            = 0;
+// const uint8_t CONTROLLER_DIRECTION   = 0;
+// const uint8_t PLANT_DIRECTION        = 1;
 // END CONTSTANT ===============================================================
 
 Ptr<Node> nodes[NODE_SIZE];
@@ -122,8 +124,8 @@ static void dequeue_handler (int idx) {
   // std::cout << "dequeue_handler: " << Simulator::Now ().GetSeconds () << " " << _devices[idx].DSN_Queue.size() << std::endl;
 }
 
-void TxPacket (int devIdx, uint32_t SRN, uint8_t direction, uint8_t seq, double payload) {
-  PacketStructure pkt_form = {SRN, direction, seq, payload};
+void TxPacket (int devIdx, uint32_t SRN, uint8_t dest_idx, uint8_t seq, double payload) {
+  PacketStructure pkt_form = {SRN, dest_idx, seq, payload};
   uint8_t* serialized_pkt = static_cast<uint8_t*>(static_cast<void*>(&pkt_form));
   Ptr<Packet> pkt = Create<Packet> (serialized_pkt, sizeof(pkt_form));
 
@@ -195,7 +197,8 @@ static void ControllerRxCallback (McpsDataIndicationParams rxParams, Ptr<Packet>
     Simulator::Schedule(Seconds(1), &dequeue_handler, myIdx); // dequeue
 
     // std::cout << "[" << Simulator::Now ().GetSeconds () << "] Rx Controller ["  << myIdx << "]: " << pkt.payload << std::endl;
-    std::cout << pkt.payload << std::endl;
+    if (myIdx == 2)
+      std::cout << pkt.payload << std::endl;
   } else {
     // std::cout << "[" << Simulator::Now ().GetSeconds () << "] " << myIdx << " discard " << rxParams.m_srcAddr << " -> " << rxParams.m_dstAddr << " ";
     // if (((pkt.SRN & (pick << myIdx)) != (pick << myIdx))) {
@@ -217,25 +220,27 @@ void ControllerTxCallback (int cycle, double interval, int myIdx) {
   _devices[myIdx].error_sum += error * 0.2;
   _devices[myIdx].error_last = error;
 
-  // uint32_t path = TriggerNode(0) +
+  int destIdx = _devices[myIdx].destination;
+
+  // uint32_t path = TriggerNode(myIdx) +
   //                  TriggerNode(3) +
   //                  TriggerNode(8) +
   //                  TriggerNode(14) +
   //                  TriggerNode(16) +
   //                  TriggerNode(21) +
   //                  TriggerNode(22) +
-  //                  TriggerNode(1);
+  //                  TriggerNode(destIdx);
 
-  uint32_t path = TriggerNode(0) +
+  uint32_t path = TriggerNode(myIdx) +
                    TriggerNode(3) +
                    TriggerNode(9) +
                    TriggerNode(15) +
                    TriggerNode(6) +
                    TriggerNode(17) +
                    TriggerNode(20) +
-                   TriggerNode(1);
+                   TriggerNode(destIdx);
 
-  // uint32_t path = TriggerNode(0) +
+  // uint32_t path = TriggerNode(myIdx) +
   //                  TriggerNode(4) +
   //                  TriggerNode(2) +
   //                  TriggerNode(10) +
@@ -243,31 +248,30 @@ void ControllerTxCallback (int cycle, double interval, int myIdx) {
   //                  TriggerNode(16) +
   //                  TriggerNode(17) +
   //                  TriggerNode(20) +
-  //                  TriggerNode(1);
+  //                  TriggerNode(destIdx);
 
-  // uint32_t path = TriggerNode(0) +
+  // uint32_t path = TriggerNode(myIdx) +
   //                  TriggerNode(5) +
   //                  TriggerNode(11) +
   //                  TriggerNode(13) +
   //                  TriggerNode(19) +
   //                  TriggerNode(21) +
   //                  TriggerNode(22) +
-  //                  TriggerNode(1);
+  //                  TriggerNode(destIdx);
 
-  // uint32_t path = TriggerNode(0) +
+  // uint32_t path = TriggerNode(myIdx) +
   //                  TriggerNode(6) +
   //                  TriggerNode(7) +
   //                  TriggerNode(18) +
-  //                  TriggerNode(1);
+  //                  TriggerNode(destIdx);
 
   // Tx a packet
   _devices[myIdx].SRN = path;
-  uint8_t direction = PLANT_DIRECTION;
   _devices[myIdx].seq++;
 
-  TxPacket(0, _devices[myIdx].SRN, direction, _devices[myIdx].seq, U);
+  TxPacket(myIdx, _devices[myIdx].SRN, _devices[myIdx].destination, _devices[myIdx].seq, U);
 
-  // std::cout << "Controller TX[" << Simulator::Now ().GetSeconds () << "]" << cycle << " times /// " << U << " " << _devices[myIdx].Y << std::endl;
+  // std::cout << myIdx << " Controller TX [" << Simulator::Now ().GetSeconds () << "]" << cycle << " times /// " << U << " " << _devices[myIdx].Y << std::endl;
   Simulator::Schedule(Seconds(interval), &ControllerTxCallback, cycle-1, interval, myIdx);
 }
 
@@ -325,12 +329,12 @@ void PlantTxCallback (int cycle, double interval, int myIdx) {
   if (_devices[myIdx].rxTrigger == false) {
     _devices[myIdx].seq++;
   }
-  TxPacket(myIdx, _devices[myIdx].SRN, CONTROLLER_DIRECTION, _devices[myIdx].seq, Y);
+  TxPacket(myIdx, _devices[myIdx].SRN, _devices[myIdx].destination, _devices[myIdx].seq, Y);
   _devices[myIdx].rxTrigger = false;
 
   // std::cout << _devices[myIdx].X[0] << "\t" << _devices[myIdx].X[1] << "\t" << _devices[myIdx].X[2] << std::endl;
   // std::cout << _devices[myIdx].X_t[0] << "\t" << _devices[myIdx].X_t[1] << "\t" << _devices[myIdx].X_t[2] << std::endl;
-  // std::cout << "Plant TX [" << Simulator::Now ().GetSeconds () << "]" << cycle << " times /// " << Y << " " << _devices[myIdx].U << std::endl;
+  //std::cout << "Plant TX [" << Simulator::Now ().GetSeconds () << "]" << cycle << " times /// " << Y << " " << _devices[myIdx].U << std::endl;
   Simulator::Schedule(Seconds(interval), &PlantTxCallback, cycle-1, interval, myIdx);
 }
 
@@ -361,7 +365,14 @@ int main (int argc, char *argv[])
 
   // give the node to role
   _devices[0].node_role = CONTROLLER_ROLE;
+  _devices[0].destination = 1;
   _devices[1].node_role = PLANT_ROLE;
+  _devices[1].destination = 0;
+
+  _devices[2].node_role = CONTROLLER_ROLE;
+  _devices[2].destination = 22;
+  _devices[22].node_role = PLANT_ROLE;
+  _devices[22].destination = 2;
 
   // initiating pacekt params
   txParams.m_dstPanId = 0;
@@ -385,6 +396,7 @@ int main (int argc, char *argv[])
   // Each device must be attached to the same channel
   Ptr<SingleModelSpectrumChannel> channel = CreateObject<SingleModelSpectrumChannel> ();
   Ptr<ConstantSpeedPropagationDelayModel> delayModel = CreateObject<ConstantSpeedPropagationDelayModel> ();
+  // Ptr<RandomPropagationDelayModel> delayModel = CreateObject<RandomPropagationDelayModel> ();
   // Ptr<LogDistancePropagationLossModel> propModel = CreateObject<LogDistancePropagationLossModel> ();
 
   // Ptr<RandomPropagationLossModel> propModel = CreateObject<RandomPropagationLossModel> ();
@@ -397,6 +409,10 @@ int main (int argc, char *argv[])
 
   channel->AddPropagationLossModel (propModel);
   channel->SetPropagationDelayModel (delayModel);
+
+  // Ptr<RateErrorModel> em = CreateObject<RateErrorModel> ();
+  // em->SetAttribute ("ErrorRate", DoubleValue (0.00001));
+  // devices.Get (1)->SetAttribute ("ReceiveErrorModel", PointerValue (em));
 
   double position[NODE_SIZE][3] = {
     {27,2,0},
